@@ -4,7 +4,6 @@ import threading
 import os
 import glob
 
-# 作ったチームメンバーを呼び出します
 from config import ConfigManager
 from rag import RAGManager
 from engine import AIEngine
@@ -12,30 +11,27 @@ from engine import AIEngine
 class AIChatApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("AI分析アシスタント (分割構成版)")
+        self.root.title("AI分析アシスタント (分割構成・修正版)")
         self.root.geometry("900x800")
         self.root.resizable(True, True)
         
-        # --- チーム結成 ---
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        self.config = ConfigManager(base_dir) # 金庫番
-        self.rag = RAGManager(base_dir)       # 司書
-        self.engine = AIEngine(self.config)   # 頭脳
+        self.config = ConfigManager(base_dir)
+        self.rag = RAGManager(base_dir)
+        self.engine = AIEngine(self.config)
         
-        # 変数初期化
         self.current_mode = tk.StringVar(value=self.config.params["last_mode"])
         self.model_map = {}
         self.history = ""
         self.system_prompt = ""
 
-        # UI構築
         self._setup_top_area()
         self._setup_mode_area()
         self._setup_log_area()
         self._setup_input_area()
         
-        # 起動処理
         self.reload_model_list()
+        self.load_model()
         self.on_mode_change()
 
     def _setup_top_area(self):
@@ -59,7 +55,6 @@ class AIChatApp:
     def _setup_log_area(self):
         self.log = scrolledtext.ScrolledText(self.root, font=("Meiryo", 11), state='disabled', padx=10, pady=10)
         self.log.pack(expand=True, fill=tk.BOTH, padx=5, pady=5)
-        # タグ設定
         self.log.tag_config("user", foreground="#0000cd", font=("Meiryo", 11, "bold"))
         self.log.tag_config("ai", foreground="#228b22", font=("Meiryo", 11, "bold"))
         self.log.tag_config("sys", foreground="#808080", font=("Meiryo", 9))
@@ -129,7 +124,6 @@ class AIChatApp:
         self.append_sep()
         self.append_log("あなた", text, "user")
         
-        # RAG処理
         rag_text, files = self.rag.get_context()
         if files: self.append_log("システム", f"参照: {','.join(files)}", "rag")
         
@@ -170,13 +164,22 @@ class AIChatApp:
             tk.Label(f, text=k, width=15).pack(side=tk.LEFT)
             e = tk.Entry(f); e.insert(0, self.config.params[k]); e.pack(side=tk.LEFT)
             entries[k] = e
+        
         def save():
-            for k,e in entries.items(): self.config.params[k] = float(e.get())
+            for k,e in entries.items():
+                val = float(e.get())
+                # ★修正点：整数であるべき項目は、ここでintに変換して保存します
+                if k in ["n_ctx", "n_threads", "max_tokens", "top_k"]:
+                    self.config.params[k] = int(val)
+                else:
+                    self.config.params[k] = val
+                    
             if self.current_mode.get() == "normal":
                 self.config.normal_temperature = self.config.params["temperature"]
             self.config.save_settings(self.current_mode.get())
             sw.destroy()
-        tk.Button(sw, text="保存", command=save).pack(pady=10)
+        
+        tk.Button(sw, text="保存", command=save, bg="#98fb98").pack(pady=10)
 
     def open_prompt(self):
         os.startfile(self.config.prompt_files[self.current_mode.get()])
