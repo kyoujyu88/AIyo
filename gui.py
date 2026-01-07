@@ -3,6 +3,7 @@ from tkinter import scrolledtext, filedialog, messagebox, ttk
 import threading
 import os
 import glob
+import psutil  # ★これを追加！（ないと言われたらインストールが必要です）
 
 from config import ConfigManager
 from rag import RAGManager
@@ -11,8 +12,8 @@ from engine import AIEngine
 class AIChatApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("AI分析アシスタント (分割構成・修正版)")
-        self.root.geometry("900x800")
+        self.root.title("AI分析アシスタント (システムモニター付)")
+        self.root.geometry("900x850") # 少し縦を伸ばしました
         self.root.resizable(True, True)
         
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -25,14 +26,20 @@ class AIChatApp:
         self.history = ""
         self.system_prompt = ""
 
+        # UI構築
         self._setup_top_area()
         self._setup_mode_area()
         self._setup_log_area()
         self._setup_input_area()
+        self._setup_status_bar() # ★ステータスバーを追加！
         
+        # 起動処理
         self.reload_model_list()
         self.load_model()
         self.on_mode_change()
+        
+        # ★監視開始！
+        self.update_system_stats()
 
     def _setup_top_area(self):
         f = tk.Frame(self.root, bg="#e0e0e0", pady=5); f.pack(side=tk.TOP, fill=tk.X)
@@ -72,6 +79,37 @@ class AIChatApp:
         self.input_text = scrolledtext.ScrolledText(f, font=("Meiryo", 11), height=4)
         self.input_text.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         self.input_text.bind("<Return>", lambda e: (self.send(), "break")[1])
+
+    # ★新機能：ステータスバーの設置
+    def _setup_status_bar(self):
+        self.status_bar = tk.Frame(self.root, bg="#333333", height=25)
+        self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        # ラベル作成（初期値）
+        self.status_label = tk.Label(self.status_bar, text="準備中...", bg="#333333", fg="white", font=("Consolas", 10))
+        self.status_label.pack(side=tk.RIGHT, padx=10)
+
+    # ★新機能：監視ロジック
+    def update_system_stats(self):
+        try:
+            # CPUとメモリの情報を取得
+            cpu = psutil.cpu_percent(interval=None)
+            mem = psutil.virtual_memory()
+            
+            # メモリの色を変える（90%超えたら危険信号！）
+            mem_color = "white"
+            if mem.percent > 90: mem_color = "#ff4500" # 赤
+            elif mem.percent > 80: mem_color = "#ffff00" # 黄色
+            
+            text = f"CPU: {cpu:>4.1f}% | MEM: {mem.percent:>4.1f}% ({mem.used / (1024**3):.1f}GB / {mem.total / (1024**3):.1f}GB)"
+            
+            self.status_label.config(text=text, fg=mem_color)
+            
+        except Exception as e:
+            self.status_label.config(text="Monitor Error")
+
+        # 1000ミリ秒（1秒）後にまた自分を呼ぶ（ループ）
+        self.root.after(1000, self.update_system_stats)
 
     # --- アクション ---
     def reload_model_list(self):
@@ -155,7 +193,6 @@ class AIChatApp:
             self.append_log("システム", f"読込: {os.path.basename(path)}", "sys")
             self.history += f"ユーザー: 以下のデータを読んで。\n\n{text[:2000]}\nシステム: 了解。\n"
 
-    # --- 補助画面 ---
     def open_settings(self):
         sw = tk.Toplevel(self.root); sw.title("設定")
         entries = {}
@@ -164,27 +201,22 @@ class AIChatApp:
             tk.Label(f, text=k, width=15).pack(side=tk.LEFT)
             e = tk.Entry(f); e.insert(0, self.config.params[k]); e.pack(side=tk.LEFT)
             entries[k] = e
-        
         def save():
             for k,e in entries.items():
                 val = float(e.get())
-                # ★修正点：整数であるべき項目は、ここでintに変換して保存します
                 if k in ["n_ctx", "n_threads", "max_tokens", "top_k"]:
                     self.config.params[k] = int(val)
                 else:
                     self.config.params[k] = val
-                    
             if self.current_mode.get() == "normal":
                 self.config.normal_temperature = self.config.params["temperature"]
             self.config.save_settings(self.current_mode.get())
             sw.destroy()
-        
         tk.Button(sw, text="保存", command=save, bg="#98fb98").pack(pady=10)
 
     def open_prompt(self):
         os.startfile(self.config.prompt_files[self.current_mode.get()])
 
-    # --- ログ描画 ---
     def append_sep(self):
         self.log.config(state='normal'); self.log.insert(tk.END, "\n" + "-"*40 + "\n", "sep"); self.log.config(state='disabled')
     def append_log(self, sender, text, tag):
