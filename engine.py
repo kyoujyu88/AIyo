@@ -9,10 +9,11 @@ class AIEngine:
 
     def load_model(self, path):
         try:
+            # ★修正点：int(...) で囲って、強制的に整数にします！
             self.llm = Llama(
                 model_path=path,
-                n_ctx=self.config.params["n_ctx"],
-                n_threads=self.config.params["n_threads"],
+                n_ctx=int(self.config.params["n_ctx"]),         # ここ！
+                n_threads=int(self.config.params["n_threads"]), # ここ！
                 n_batch=512, verbose=False
             )
             return True, os.path.basename(path)
@@ -22,7 +23,6 @@ class AIEngine:
     def generate(self, prompt):
         if not self.llm: return None
         
-        # 暴走防止ストッパー
         stop_words = ["ユーザー:", "システム:", "\nユーザー:", "\nシステム:", "User:", "System:"]
         
         return self.llm(
@@ -30,6 +30,10 @@ class AIEngine:
             max_tokens=2048,
             temperature=self.config.params["temperature"],
             stop=stop_words,
+            # ★修正点：念のためここも整数化しておきます
+            top_k=int(self.config.params["top_k"]),
+            top_p=self.config.params["top_p"],
+            repeat_penalty=self.config.params["repeat_penalty"],
             stream=True
         )
 
