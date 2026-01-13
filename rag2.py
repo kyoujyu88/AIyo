@@ -3,6 +3,8 @@ import glob
 import pickle
 import numpy as np
 import faiss
+import shutil      # ★追加：ファイルを移動する道具
+import tempfile    # ★追加：一時ファイルを作る道具
 from llama_cpp import Llama 
 
 class RAGManager:
@@ -14,7 +16,6 @@ class RAGManager:
         # 篤志くんのGemmaモデル
         self.model_path = os.path.join(base_dir, "gguf", "gemma-2-2b-jpn-it-Q4_K_M.gguf")
         
-        # 起動時にも作るけど...
         if not os.path.exists(self.knowledge_dir): os.makedirs(self.knowledge_dir)
         if not os.path.exists(self.db_path): os.makedirs(self.db_path)
 
@@ -90,14 +91,29 @@ class RAGManager:
         self.index.add(np_embeddings.astype('float32'))
         self.chunks = new_chunks
 
-        # ★★★ここを追加修正！★★★
-        # 保存直前に、フォルダが絶対にあるか確認して、なければ作る！
         if not os.path.exists(self.db_path):
             os.makedirs(self.db_path)
 
-        faiss.write_index(self.index, os.path.join(self.db_path, "index.faiss"))
-        with open(os.path.join(self.db_path, "chunks.pkl"), "wb") as f:
-            pickle.dump(self.chunks, f)
+        # ★★★ここを修正！日本語パス対策★★★
+        try:
+            # 1. 日本語を含まない「安全な場所（Temp）」に一時保存
+            fd, temp_path = tempfile.mkstemp(suffix=".faiss")
+            os.close(fd) # ファイルを開放
+            
+            # FAISSにはその安全なパスを渡す
+            faiss.write_index(self.index, temp_path)
+            
+            # 2. 作成されたファイルを、本来の場所へ「移動」する（Pythonなら日本語パスOK）
+            target_path = os.path.join(self.db_path, "index.faiss")
+            if os.path.exists(target_path): os.remove(target_path) # 古いのがあれば消す
+            shutil.move(temp_path, target_path)
+            
+            # chunks.pkl はPython標準機能なのでそのまま保存できる
+            with open(os.path.join(self.db_path, "chunks.pkl"), "wb") as f:
+                pickle.dump(self.chunks, f)
+
+        except Exception as e:
+            return f"保存エラー(日本語パス対策失敗): {e}"
 
         return f"完了！ {len(new_chunks)}個のデータを処理しました。"
 
@@ -142,12 +158,19 @@ class RAGManager:
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f: return f.read()
         except: return None
+    
+    # ★読込時も日本語パス対策
     def load_db(self):
         try:
-            idx = os.path.join(self.db_path, "index.faiss")
-            chk = os.path.join(self.db_path, "chunks.pkl")
-            if os.path.exists(idx) and os.path.exists(chk):
-                self.index = faiss.read_index(idx)
-                with open(chk, "rb") as f: self.chunks = pickle.load(f)
+            idx_path = os.path.join(self.db_path, "index.faiss")
+            chk_path = os.path.join(self.db_path, "chunks.pkl")
+            
+            if os.path.exists(idx_path) and os.path.exists(chk_path):
+                # 読込は Python の read_index が頑張ってくれる場合が多いですが、
+                # 念のためここもダメならTemp経由にするなどの対策が必要かも
+                # まずは通常通りトライ
+                self.index = faiss.read_index(idx_path)
+                with open(chk_path, "rb") as f: self.chunks = pickle.load(f)
                 print("ベクトルDBを読み込みました")
-        except: pass
+        except Exception as e:
+            print(f"DB読込エラー(恐らく初回): {e}")
