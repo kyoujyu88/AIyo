@@ -3,9 +3,9 @@ from tkinter import scrolledtext, filedialog, messagebox, ttk
 import threading
 import os
 import glob
-import psutil  # CPUモニター用
+import psutil  # CPU監視用
 
-# 分割したチームメンバーを読み込み
+# 各担当モジュールの読み込み
 from config import ConfigManager
 from rag import RAGManager
 from engine import AIEngine
@@ -13,18 +13,18 @@ from engine import AIEngine
 class AIChatApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("AI分析アシスタント (完全版)")
-        self.root.geometry("900x850")
+        self.root.title("AI分析アシスタント (Ryzen 9 Edition)")
+        self.root.geometry("950x850") # 少し横幅を広げました
         self.root.resizable(True, True)
         
         # --- チーム結成 ---
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        self.config = ConfigManager(base_dir) # 設定管理
-        self.rag = RAGManager(base_dir)       # 知識管理
-        self.engine = AIEngine(self.config)   # AI脳
+        self.config = ConfigManager(base_dir)
+        self.rag = RAGManager(base_dir)
+        self.engine = AIEngine(self.config)
         
         # 変数初期化
-        self.current_mode = tk.StringVar(value=self.config.params["last_mode"])
+        self.current_mode = tk.StringVar(value=self.config.params.get("last_mode", "normal"))
         self.model_map = {}
         self.history = ""
         self.system_prompt = ""
@@ -36,24 +36,27 @@ class AIChatApp:
         self._setup_input_area()
         self._setup_status_bar()
         
-        # 起動時の処理
+        # 起動時処理
         self.reload_model_list()
-        self.load_model()        # 自動で前回のモデルを読み込む
+        self.load_model()
         self.on_mode_change()
         
-        # システム監視開始
+        # 全体監視スタート
         self.update_system_stats()
 
     def _setup_top_area(self):
         f = tk.Frame(self.root, bg="#e0e0e0", pady=5); f.pack(side=tk.TOP, fill=tk.X)
         tk.Label(f, text="モデル:", bg="#e0e0e0").pack(side=tk.LEFT, padx=5)
         
-        self.model_combo = ttk.Combobox(f, width=40, state="readonly")
+        self.model_combo = ttk.Combobox(f, width=35, state="readonly")
         self.model_combo.pack(side=tk.LEFT, padx=5)
         
         tk.Button(f, text="読込", command=self.load_model, bg="#98fb98").pack(side=tk.LEFT, padx=5)
         
-        # ★ベクトル化用の更新ボタン
+        # ★新機能：Ryzenモニター起動ボタン
+        tk.Button(f, text="📊 CPU詳細", command=self.open_cpu_monitor, bg="#dda0dd").pack(side=tk.LEFT, padx=5)
+        
+        # ベクトルDB更新ボタン
         tk.Button(f, text="🔄 DB更新", command=self.build_vector_db, bg="#ff7f50").pack(side=tk.RIGHT, padx=2)
         
         tk.Button(f, text="📚 知識", command=self.rag.open_folder, bg="#ffd700").pack(side=tk.RIGHT, padx=2)
@@ -69,10 +72,12 @@ class AIChatApp:
     def _setup_log_area(self):
         self.log = scrolledtext.ScrolledText(self.root, font=("Meiryo", 11), state='disabled', padx=10, pady=10)
         self.log.pack(expand=True, fill=tk.BOTH, padx=5, pady=5)
+        
+        # 色分けタグ設定
         self.log.tag_config("user", foreground="#0000cd", font=("Meiryo", 11, "bold"))
         self.log.tag_config("ai", foreground="#228b22", font=("Meiryo", 11, "bold"))
         self.log.tag_config("sys", foreground="#808080", font=("Meiryo", 9))
-        self.log.tag_config("rag", foreground="#ff8c00", font=("Meiryo", 9)) # RAGはオレンジ色
+        self.log.tag_config("rag", foreground="#ff8c00", font=("Meiryo", 9))
         self.log.tag_config("sep", foreground="#d3d3d3")
 
     def _setup_input_area(self):
@@ -85,43 +90,112 @@ class AIChatApp:
 
         self.input_text = scrolledtext.ScrolledText(f, font=("Meiryo", 11), height=4)
         self.input_text.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        # Shift+Enterで改行、Enterで送信
         self.input_text.bind("<Return>", lambda e: (self.send(), "break")[1])
 
     def _setup_status_bar(self):
         self.status_bar = tk.Frame(self.root, bg="#333333", height=25)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
-        self.status_label = tk.Label(self.status_bar, text="準備中...", bg="#333333", fg="white", font=("Consolas", 10))
+        self.status_label = tk.Label(self.status_bar, text="System Ready", bg="#333333", fg="white", font=("Consolas", 10))
         self.status_label.pack(side=tk.RIGHT, padx=10)
+
+    # --- ★ここが新機能！Ryzenモニター ---
+    def open_cpu_monitor(self):
+        monitor_win = tk.Toplevel(self.root)
+        # スレッド数を取得 (5900Xなら24)
+        count = psutil.cpu_count()
+        monitor_win.title(f"Ryzen Monitor - {count} Threads")
+        monitor_win.geometry("650x500")
+        monitor_win.configure(bg="#1a1a1a")
+
+        # スクロール対応のキャンバス（24個並ぶと縦に長いので）
+        canvas = tk.Canvas(monitor_win, bg="#1a1a1a", highlightthickness=0)
+        scrollbar = ttk.Scrollbar(monitor_win, orient="vertical", command=canvas.yview)
+        scroll_frame = tk.Frame(canvas, bg="#1a1a1a")
+
+        scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        # グラフ（プログレスバー）の準備
+        bars = []
+        labels = []
+        cols = 2 # 2列で表示
+        
+        for i in range(count):
+            row = i // cols
+            col = i % cols
+            
+            f = tk.Frame(scroll_frame, bg="#1a1a1a", pady=5, padx=10)
+            f.grid(row=row, column=col, sticky="ew")
+            
+            lbl = tk.Label(f, text=f"CPU {i:02}: 0.0%", fg="#00ff00", bg="#1a1a1a", font=("Consolas", 10), width=12, anchor="w")
+            lbl.pack(side=tk.LEFT)
+            
+            # 緑色のバー
+            style = ttk.Style()
+            style.theme_use('default')
+            style.configure("green.Horizontal.TProgressbar", background='#00ff00', troughcolor='#333333', thickness=10)
+            
+            pb = ttk.Progressbar(f, length=180, maximum=100, mode='determinate', style="green.Horizontal.TProgressbar")
+            pb.pack(side=tk.LEFT, padx=5)
+            
+            bars.append(pb)
+            labels.append(lbl)
+
+        # 更新ループ関数
+        def update_loop():
+            if not monitor_win.winfo_exists(): return
+            try:
+                # 個別の負荷を取得
+                percents = psutil.cpu_percent(interval=None, percpu=True)
+                for i, p in enumerate(percents):
+                    if i < len(bars):
+                        bars[i]['value'] = p
+                        labels[i].config(text=f"CPU {i:02}: {p:>4.1f}%")
+                        # 80%超えで赤文字警告
+                        if p > 80: labels[i].config(fg="#ff4500")
+                        else: labels[i].config(fg="#00ff00")
+            except: pass
+            
+            # 0.5秒ごとに更新
+            monitor_win.after(500, update_loop)
+
+        # 最初のキック
+        update_loop()
 
     # --- アクション ---
     
-    # ベクトルDB作成（新機能）
+    # 全体ステータス監視
+    def update_system_stats(self):
+        try:
+            cpu = psutil.cpu_percent(interval=None)
+            mem = psutil.virtual_memory()
+            mem_col = "white"
+            if mem.percent > 90: mem_col = "#ff4500"
+            elif mem.percent > 80: mem_col = "#ffff00"
+            
+            used_gb = mem.used / (1024**3)
+            total_gb = mem.total / (1024**3)
+            
+            text = f"Total CPU: {cpu:>4.1f}% | MEM: {mem.percent:>4.1f}% ({used_gb:.1f}GB / {total_gb:.1f}GB)"
+            self.status_label.config(text=text, fg=mem_col)
+        except: pass
+        self.root.after(1000, self.update_system_stats)
+
+    # ベクトルDB作成
     def build_vector_db(self):
         if messagebox.askyesno("確認", "知識フォルダの内容をベクトル化してDBを更新しますか？\n（データの量によっては時間がかかります）"):
             threading.Thread(target=self._run_build_db, daemon=True).start()
 
     def _run_build_db(self):
         self.append_log("システム", "ベクトル化を開始しました...お待ちください...", "sys")
-        # rag.py の build_database を呼び出す
         msg = self.rag.build_database()
-        # 完了通知
         self.root.after(0, lambda: messagebox.showinfo("完了", msg))
         self.root.after(0, lambda: self.append_log("システム", f"DB更新: {msg}", "sys"))
-
-    # システム監視
-    def update_system_stats(self):
-        try:
-            cpu = psutil.cpu_percent(interval=None)
-            mem = psutil.virtual_memory()
-            mem_color = "white"
-            if mem.percent > 90: mem_color = "#ff4500"
-            elif mem.percent > 80: mem_color = "#ffff00"
-            
-            text = f"CPU: {cpu:>4.1f}% | MEM: {mem.percent:>4.1f}% ({mem.used / (1024**3):.1f}GB / {mem.total / (1024**3):.1f}GB)"
-            self.status_label.config(text=text, fg=mem_color)
-        except:
-            self.status_label.config(text="Monitor Error")
-        self.root.after(1000, self.update_system_stats)
 
     # モデル操作
     def reload_model_list(self):
@@ -150,7 +224,7 @@ class AIChatApp:
         else: print(msg)
 
     def post_load(self, name):
-        self.root.title(f"AI Assistant - {name}")
+        self.root.title(f"AI Assistant (Ryzen Edition) - {name}")
         self.append_log("システム", f"準備完了: {name}", "sys")
         self.on_mode_change()
 
@@ -163,11 +237,11 @@ class AIChatApp:
         else:
             self.config.params["temperature"] = 0.0
             
-        self.append_log("システム", f"モード変更: {mode} (Temp:{self.config.params['temperature']})", "sys")
+        self.append_log("システム", f"モード変更: {mode}", "sys")
         self.history = self.system_prompt + "\n"
         self.config.save_settings(mode)
 
-    # 送信処理
+    # 送信
     def send(self):
         text = self.input_text.get("1.0", tk.END).strip()
         if not text: return
@@ -175,7 +249,7 @@ class AIChatApp:
         self.append_sep()
         self.append_log("あなた", text, "user")
         
-        # ★ここ重要：入力テキスト(text)を渡して検索させる
+        # RAG検索（GGUFモデルでベクトル検索）
         rag_text, files = self.rag.get_context(text)
         if files: self.append_log("システム", f"参照: {','.join(files)}", "rag")
         
@@ -207,11 +281,9 @@ class AIChatApp:
             self.append_log("システム", f"読込: {os.path.basename(path)}", "sys")
             self.history += f"ユーザー: 以下のデータを読んで。\n\n{text[:2000]}\nシステム: 了解。\n"
 
-    # 設定画面（int/float修正済み）
     def open_settings(self):
         sw = tk.Toplevel(self.root); sw.title("設定")
         entries = {}
-        # 必要な項目だけ表示
         keys = ["n_ctx", "temperature", "max_tokens", "repeat_penalty", "top_k"]
         for k in keys:
             if k in self.config.params:
@@ -219,27 +291,22 @@ class AIChatApp:
                 tk.Label(f, text=k, width=15).pack(side=tk.LEFT)
                 e = tk.Entry(f); e.insert(0, self.config.params[k]); e.pack(side=tk.LEFT)
                 entries[k] = e
-        
         def save():
             for k,e in entries.items():
                 val = float(e.get())
-                # 整数であるべきものはintに変換
                 if k in ["n_ctx", "n_threads", "max_tokens", "top_k"]:
                     self.config.params[k] = int(val)
                 else:
                     self.config.params[k] = val
-                    
             if self.current_mode.get() == "normal":
                 self.config.normal_temperature = self.config.params["temperature"]
             self.config.save_settings(self.current_mode.get())
             sw.destroy()
-        
         tk.Button(sw, text="保存", command=save, bg="#98fb98").pack(pady=10)
 
     def open_prompt(self):
         os.startfile(self.config.prompt_files[self.current_mode.get()])
 
-    # ログ描画ヘルパー
     def append_sep(self):
         self.log.config(state='normal'); self.log.insert(tk.END, "\n" + "-"*40 + "\n", "sep"); self.log.config(state='disabled')
     def append_log(self, sender, text, tag):
