@@ -11,7 +11,7 @@ class RAGManager:
         self.knowledge_dir = os.path.join(base_dir, "knowledge")
         self.db_path = os.path.join(base_dir, "vector_db")
         
-        # Gemmaモデルのパス（ここはそのままでOK）
+        # 篤志くんの持っているGemmaモデルを指定
         self.model_path = os.path.join(base_dir, "gguf", "gemma-2-2b-jpn-it-Q4_K_M.gguf")
         
         if not os.path.exists(self.knowledge_dir): os.makedirs(self.knowledge_dir)
@@ -28,6 +28,7 @@ class RAGManager:
             print(f"Embedding用モデル(Gemma)を読み込んでいます...\n{self.model_path}")
             if not os.path.exists(self.model_path):
                 return f"モデルが見つかりません: {self.model_path}"
+                
             try:
                 self.embed_model = Llama(
                     model_path=self.model_path,
@@ -46,7 +47,7 @@ class RAGManager:
         files = glob.glob(os.path.join(self.knowledge_dir, "*.txt"))
         if not files: return "知識ファイル(.txt)がありません"
 
-        raw_chunks = []
+        new_chunks = []
         for file_path in files:
             try:
                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -58,55 +59,52 @@ class RAGManager:
                     for i in range(0, len(text), chunk_size - overlap):
                         chunk_text = text[i : i + chunk_size].strip()
                         if len(chunk_text) > 10:
-                            raw_chunks.append(f"【出典:{filename}】\n{chunk_text}")
+                            new_chunks.append(f"【出典:{filename}】\n{chunk_text}")
             except: pass
 
-        if not raw_chunks: return "有効なテキストがありませんでした"
+        if not new_chunks: return "有効なテキストがありませんでした"
 
-        # ★ここを修正！安全装置付きのベクトル化ループ
         embeddings = []
-        valid_chunks = [] # 成功したテキストだけを入れるリスト
-        expected_dim = None # 最初のデータのサイズを基準にする
-
-        print(f"ベクトル化を開始します({len(raw_chunks)}件)...")
-        print("※Gemmaを使っているため、少し時間がかかります")
+        print(f"ベクトル化を開始します({len(new_chunks)}件)...")
         
-        for i, chunk in enumerate(raw_chunks):
+        for i, chunk in enumerate(new_chunks):
             try:
                 vec = self.embed_model.create_embedding(chunk)
-                current_vec = vec['data'][0]['embedding']
-                current_dim = len(current_vec)
+                raw_vec = vec['data'][0]['embedding']
                 
-                # 最初の1個目で「基準サイズ」を決める
-                if expected_dim is None:
-                    expected_dim = current_dim
-                
-                # 基準サイズと同じなら採用、違ったら捨てる
-                if current_dim == expected_dim:
-                    embeddings.append(current_vec)
-                    valid_chunks.append(chunk)
-                else:
-                    print(f"スキップ: チャンク{i}のサイズ異常 ({current_dim} vs {expected_dim})")
-
+                # ★ここが修正ポイント！
+                # もしリストの中にリストが入っていたら、中身を取り出す
+                if isinstance(raw_vec[0], list):
+                    raw_vec = raw_vec[0]
+                    
+                embeddings.append(raw_vec)
             except Exception as e:
-                print(f"Error at chunk {i}: {e}")
+                print(f"チャンク処理エラー: {e}")
             
-            if (i+1) % 5 == 0: print(f"{i+1}/{len(raw_chunks)} 完了")
+            if (i+1) % 5 == 0: print(f"{i+1}/{len(new_chunks)} 完了")
 
         if not embeddings: return "ベクトル化に失敗しました"
 
+        # ★ここも修正ポイント！
+        # NumPy配列に変換してから、余計な次元があったら潰す（squeeze）
+        np_embeddings = np.array(embeddings)
+        if np_embeddings.ndim > 2:
+            np_embeddings = np.squeeze(np_embeddings)
+            
+        print(f"データの形状: {np_embeddings.shape}") # デバッグ用に表示
+
         # FAISSへ登録
-        self.index = faiss.IndexFlatL2(expected_dim)
-        self.index.add(np.array(embeddings).astype('float32'))
-        
-        # ★成功したものだけを正解データとして保存
-        self.chunks = valid_chunks
+        dimension = np_embeddings.shape[1]
+        self.index = faiss.IndexFlatL2(dimension)
+        # float32型に変換して登録
+        self.index.add(np_embeddings.astype('float32'))
+        self.chunks = new_chunks
 
         faiss.write_index(self.index, os.path.join(self.db_path, "index.faiss"))
         with open(os.path.join(self.db_path, "chunks.pkl"), "wb") as f:
             pickle.dump(self.chunks, f)
 
-        return f"完了！ {len(valid_chunks)}個のデータを処理しました。"
+        return f"完了！ {len(new_chunks)}個のデータを処理しました。"
 
     def get_context(self, query):
         if self.index is None or not self.chunks: return "", []
@@ -114,12 +112,19 @@ class RAGManager:
         if err: return "", []
 
         try:
-            # 質問もベクトル化
-            query_vec = self.embed_model.create_embedding(query)['data'][0]['embedding']
+            vec_res = self.embed_model.create_embedding(query)
+            query_vec = vec_res['data'][0]['embedding']
             
-            # 検索
+            # 質問ベクトルも同様に整形
+            if isinstance(query_vec[0], list): query_vec = query_vec[0]
+            
+            # 2次元配列（1行x次元数）にする
+            np_query = np.array([query_vec]).astype('float32')
+            if np_query.ndim > 2: np_query = np.squeeze(np_query)
+            if np_query.ndim == 1: np_query = np.expand_dims(np_query, axis=0)
+            
             k = 3
-            distances, indices = self.index.search(np.array([query_vec]).astype('float32'), k)
+            distances, indices = self.index.search(np_query, k)
             
             results = []
             source_files = []
@@ -127,17 +132,16 @@ class RAGManager:
                 if i < len(self.chunks) and i >= 0:
                     results.append(self.chunks[i])
                     try:
-                        # ファイル名の抽出
-                        if "【出典:" in self.chunks[i]:
-                            fname = self.chunks[i].split("【出典:")[1].split("】")[0]
-                            if fname not in source_files: source_files.append(fname)
+                        fname = self.chunks[i].split("【出典:")[1].split("】")[0]
+                        if fname not in source_files: source_files.append(fname)
                     except: pass
 
             if results:
                 context_text = "\n\n".join(results)
                 formatted = f"\n\n### 参照情報 ###\n{context_text}\n################\n"
                 return formatted, source_files
-        except: pass
+        except Exception as e:
+            print(f"検索エラー: {e}")
         
         return "", []
 
