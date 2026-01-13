@@ -11,9 +11,10 @@ class RAGManager:
         self.knowledge_dir = os.path.join(base_dir, "knowledge")
         self.db_path = os.path.join(base_dir, "vector_db")
         
-        # 篤志くんの持っているGemmaモデルを指定
+        # 篤志くんのGemmaモデル
         self.model_path = os.path.join(base_dir, "gguf", "gemma-2-2b-jpn-it-Q4_K_M.gguf")
         
+        # 起動時にも作るけど...
         if not os.path.exists(self.knowledge_dir): os.makedirs(self.knowledge_dir)
         if not os.path.exists(self.db_path): os.makedirs(self.db_path)
 
@@ -28,7 +29,6 @@ class RAGManager:
             print(f"Embedding用モデル(Gemma)を読み込んでいます...\n{self.model_path}")
             if not os.path.exists(self.model_path):
                 return f"モデルが見つかりません: {self.model_path}"
-                
             try:
                 self.embed_model = Llama(
                     model_path=self.model_path,
@@ -71,12 +71,7 @@ class RAGManager:
             try:
                 vec = self.embed_model.create_embedding(chunk)
                 raw_vec = vec['data'][0]['embedding']
-                
-                # ★ここが修正ポイント！
-                # もしリストの中にリストが入っていたら、中身を取り出す
-                if isinstance(raw_vec[0], list):
-                    raw_vec = raw_vec[0]
-                    
+                if isinstance(raw_vec[0], list): raw_vec = raw_vec[0]
                 embeddings.append(raw_vec)
             except Exception as e:
                 print(f"チャンク処理エラー: {e}")
@@ -85,20 +80,20 @@ class RAGManager:
 
         if not embeddings: return "ベクトル化に失敗しました"
 
-        # ★ここも修正ポイント！
-        # NumPy配列に変換してから、余計な次元があったら潰す（squeeze）
         np_embeddings = np.array(embeddings)
-        if np_embeddings.ndim > 2:
-            np_embeddings = np.squeeze(np_embeddings)
-            
-        print(f"データの形状: {np_embeddings.shape}") # デバッグ用に表示
+        if np_embeddings.ndim > 2: np_embeddings = np.squeeze(np_embeddings)
+        
+        print(f"データの形状: {np_embeddings.shape}")
 
-        # FAISSへ登録
         dimension = np_embeddings.shape[1]
         self.index = faiss.IndexFlatL2(dimension)
-        # float32型に変換して登録
         self.index.add(np_embeddings.astype('float32'))
         self.chunks = new_chunks
+
+        # ★★★ここを追加修正！★★★
+        # 保存直前に、フォルダが絶対にあるか確認して、なければ作る！
+        if not os.path.exists(self.db_path):
+            os.makedirs(self.db_path)
 
         faiss.write_index(self.index, os.path.join(self.db_path, "index.faiss"))
         with open(os.path.join(self.db_path, "chunks.pkl"), "wb") as f:
@@ -114,11 +109,8 @@ class RAGManager:
         try:
             vec_res = self.embed_model.create_embedding(query)
             query_vec = vec_res['data'][0]['embedding']
-            
-            # 質問ベクトルも同様に整形
             if isinstance(query_vec[0], list): query_vec = query_vec[0]
             
-            # 2次元配列（1行x次元数）にする
             np_query = np.array([query_vec]).astype('float32')
             if np_query.ndim > 2: np_query = np.squeeze(np_query)
             if np_query.ndim == 1: np_query = np.expand_dims(np_query, axis=0)
