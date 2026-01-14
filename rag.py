@@ -3,8 +3,8 @@ import glob
 import pickle
 import numpy as np
 import faiss
-import shutil      # ファイル移動用
-import tempfile    # 一時ファイル作成用
+import shutil
+import tempfile
 from llama_cpp import Llama 
 
 class RAGManager:
@@ -13,10 +13,9 @@ class RAGManager:
         self.knowledge_dir = os.path.join(base_dir, "knowledge")
         self.db_path = os.path.join(base_dir, "vector_db")
         
-        # 篤志くんのGemmaモデル
+        # ★Gemmaモデルのパス（ここが合っているか確認！）
         self.model_path = os.path.join(base_dir, "gguf", "gemma-2-2b-jpn-it-Q4_K_M.gguf")
         
-        # フォルダ作成
         if not os.path.exists(self.knowledge_dir): os.makedirs(self.knowledge_dir)
         if not os.path.exists(self.db_path): os.makedirs(self.db_path)
 
@@ -28,7 +27,7 @@ class RAGManager:
 
     def _load_model(self):
         if self.embed_model is None:
-            print(f"Embedding用モデル(Gemma)を読み込んでいます...\n{self.model_path}")
+            print(f"Embeddingモデル読込中...\n{self.model_path}")
             if not os.path.exists(self.model_path):
                 return f"モデルが見つかりません: {self.model_path}"
             try:
@@ -36,7 +35,9 @@ class RAGManager:
                     model_path=self.model_path,
                     embedding=True,
                     verbose=False,
-                    n_ctx=2048
+                    n_ctx=2048,
+                    n_threads=6,    # ★ここも6スレッドに制限
+                    n_gpu_layers=0  # ★GPUオフ
                 )
             except Exception as e:
                 return f"モデル読込エラー: {e}"
@@ -49,10 +50,8 @@ class RAGManager:
         files = glob.glob(os.path.join(self.knowledge_dir, "*.txt"))
         if not files: return "知識ファイル(.txt)がありません"
 
-        # 検出ファイルをログに出す
-        print(f"\n【検出されたファイル】")
-        for f in files:
-            print(f" - {os.path.basename(f)}")
+        print(f"\n【検出ファイル一覧】")
+        for f in files: print(f" - {os.path.basename(f)}")
         print("-" * 20)
 
         new_chunks = []
@@ -62,9 +61,9 @@ class RAGManager:
                     text = f.read()
                     filename = os.path.basename(file_path)
                     
-                    # Gemma向けチャンク設定
-                    chunk_size = 250
-                    overlap = 30
+                    # チャンク分割
+                    chunk_size = 300
+                    overlap = 50
                     for i in range(0, len(text), chunk_size - overlap):
                         chunk_text = text[i : i + chunk_size].strip()
                         if len(chunk_text) > 10:
@@ -74,7 +73,7 @@ class RAGManager:
         if not new_chunks: return "有効なテキストがありませんでした"
 
         embeddings = []
-        print(f"ベクトル化を開始します({len(new_chunks)}件)...")
+        print(f"ベクトル化開始 ({len(new_chunks)}件)...")
         
         for i, chunk in enumerate(new_chunks):
             try:
@@ -83,30 +82,26 @@ class RAGManager:
                 if isinstance(raw_vec[0], list): raw_vec = raw_vec[0]
                 embeddings.append(raw_vec)
             except Exception as e:
-                print(f"チャンク処理エラー({i}): {e}")
-            
-            if (i+1) % 5 == 0: print(f"{i+1}/{len(new_chunks)} 完了")
+                print(f"Error chunk {i}: {e}")
+            if (i+1) % 10 == 0: print(f"{i+1}/{len(new_chunks)} 完了")
 
-        if not embeddings: return "ベクトル化に失敗しました"
+        if not embeddings: return "ベクトル化失敗"
 
+        # 整形
         np_embeddings = np.array(embeddings)
         if np_embeddings.ndim > 2: np_embeddings = np.squeeze(np_embeddings)
         
-        print(f"データの形状: {np_embeddings.shape}")
-
+        # FAISSインデックス作成
         dimension = np_embeddings.shape[1]
         self.index = faiss.IndexFlatL2(dimension)
         self.index.add(np_embeddings.astype('float32'))
         self.chunks = new_chunks
 
-        if not os.path.exists(self.db_path):
-            os.makedirs(self.db_path)
-
-        # 日本語パス対策：Tempファイル経由保存
+        # ★最強の保存処理（日本語パス対策）
+        if not os.path.exists(self.db_path): os.makedirs(self.db_path)
         try:
             fd, temp_path = tempfile.mkstemp(suffix=".faiss")
             os.close(fd)
-            
             faiss.write_index(self.index, temp_path)
             
             target_path = os.path.join(self.db_path, "index.faiss")
@@ -115,11 +110,10 @@ class RAGManager:
             
             with open(os.path.join(self.db_path, "chunks.pkl"), "wb") as f:
                 pickle.dump(self.chunks, f)
-
         except Exception as e:
             return f"保存エラー: {e}"
 
-        return f"完了！ {len(new_chunks)}個のデータを処理しました。"
+        return f"完了！ {len(new_chunks)}件処理しました。"
 
     def get_context(self, query):
         if self.index is None or not self.chunks: return "", []
@@ -127,7 +121,6 @@ class RAGManager:
         if err: return "", []
 
         try:
-            # 質問のベクトル化
             vec_res = self.embed_model.create_embedding(query)
             query_vec = vec_res['data'][0]['embedding']
             if isinstance(query_vec[0], list): query_vec = query_vec[0]
@@ -136,43 +129,40 @@ class RAGManager:
             if np_query.ndim > 2: np_query = np.squeeze(np_query)
             if np_query.ndim == 1: np_query = np.expand_dims(np_query, axis=0)
             
-            # ★公平フィルター：候補を広く(15件)取る
-            k = 15
+            # ★100件取得して重複を除外する（埋もれたファイル救出作戦）
+            k = 100
+            total = len(self.chunks)
+            if k > total: k = total
+            
             distances, indices = self.index.search(np_query, k)
             
             results = []
             source_files = []
-            file_counts = {} # ファイルごとの採用数をカウント
+            file_counts = {}
             
-            print("\n--- 検索ヒット状況 (公平フィルター) ---")
-            
+            print("\n--- 検索ヒット状況 (Top選抜) ---")
             for i in indices[0]:
                 if i < len(self.chunks) and i >= 0:
                     chunk = self.chunks[i]
                     try:
                         fname = chunk.split("【出典:")[1].split("】")[0]
                         
-                        # ★ここが重要！同じファイルからは最大2つまで
-                        current_count = file_counts.get(fname, 0)
-                        if current_count >= 2:
-                            print(f"・除外(重複): {fname}")
-                            continue # 次の候補へスキップ
+                        # 公平フィルター：1ファイルにつき最大2件まで
+                        count = file_counts.get(fname, 0)
+                        if count >= 2: continue
                         
-                        # 採用
                         results.append(chunk)
                         if fname not in source_files: source_files.append(fname)
-                        file_counts[fname] = current_count + 1
-                        print(f"・採用!: {fname}")
+                        file_counts[fname] = count + 1
+                        print(f"・採用: {fname}")
                         
-                        # 合計5件集まったら十分
                         if len(results) >= 5: break
-                        
                     except: pass
-            print("---------------------------------------\n")
+            print("--------------------------------\n")
 
             if results:
                 context_text = "\n\n".join(results)
-                formatted = f"\n\n### 🧠 ベクトルDB検索結果 ###\n{context_text}\n#############################\n"
+                formatted = f"\n\n### 🧠 知識データベース参照 ###\n{context_text}\n#############################\n"
                 return formatted, source_files
         except Exception as e:
             print(f"検索エラー: {e}")
@@ -180,18 +170,16 @@ class RAGManager:
         return "", []
 
     def open_folder(self): os.startfile(self.knowledge_dir)
-    
     def load_user_file(self, path):
         try:
             with open(path, "r", encoding="utf-8", errors="ignore") as f: return f.read()
         except: return None
-        
     def load_db(self):
         try:
-            idx_path = os.path.join(self.db_path, "index.faiss")
-            chk_path = os.path.join(self.db_path, "chunks.pkl")
-            if os.path.exists(idx_path) and os.path.exists(chk_path):
-                self.index = faiss.read_index(idx_path)
-                with open(chk_path, "rb") as f: self.chunks = pickle.load(f)
-                print("ベクトルDBを読み込みました")
+            idx = os.path.join(self.db_path, "index.faiss")
+            chk = os.path.join(self.db_path, "chunks.pkl")
+            if os.path.exists(idx) and os.path.exists(chk):
+                self.index = faiss.read_index(idx)
+                with open(chk, "rb") as f: self.chunks = pickle.load(f)
+                print("DB読込完了")
         except: pass
