@@ -16,27 +16,22 @@ class AIEngine:
             threads = self.config.params.get("n_threads", 6)
             n_ctx = self.config.params.get("n_ctx", 8192)
             
-            print(f"DEBUG: モデル読込開始 (Threads={threads}, ctx={n_ctx})")
+            print(f"DEBUG: Load Model (Threads={threads}, ctx={n_ctx})")
             
             self.llm = Llama(
                 model_path=path,
                 n_ctx=n_ctx,
                 n_threads=threads,
-                n_gpu_layers=0, # ★GPUオフ（事務所PC用）
-                verbose=True 
+                n_gpu_layers=0,
+                verbose=False # ログが多すぎるので一旦False
             )
             return True, os.path.basename(path)
         except Exception as e:
-            print(f"DEBUG: モデル読込エラー: {e}")
             return False, f"読込エラー: {e}"
 
     def generate(self, prompt):
-        if not self.llm:
-            print("DEBUG: モデルが読み込まれていません")
-            return None
-        
+        if not self.llm: return None
         self.stop_flag = False
-        print(f"DEBUG: 生成リクエスト受信。文字数: {len(prompt)}")
         
         try:
             stream = self.llm(
@@ -47,13 +42,20 @@ class AIEngine:
                 repeat_penalty=self.config.params["repeat_penalty"],
                 stream=True
             )
-            print("DEBUG: ストリーム生成を開始しました")
-            return stream
+            # ★ここ！受信したデータをそのまま返すラッパー関数を作ります
+            def debug_stream():
+                print("DEBUG: Stream Start")
+                for output in stream:
+                    # 受信した文字をコンソールに表示（デバッグ）
+                    token = output['choices'][0]['text']
+                    print(f"Token: '{token}'", end="", flush=True)
+                    yield output
+                print("\nDEBUG: Stream End")
+            
+            return debug_stream()
             
         except Exception as e:
-            print(f"\n!!!!!!!! エラー発生 !!!!!!!!\n{e}\n!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
-            if "exceeds context window" in str(e):
-                print("ヒント: n_ctx のサイズが足りていません。config.pyを確認してください。")
+            print(f"Generate Error: {e}")
             return None
 
     def stop(self):
