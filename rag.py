@@ -13,7 +13,7 @@ class RAGManager:
         self.knowledge_dir = os.path.join(base_dir, "knowledge")
         self.db_path = os.path.join(base_dir, "vector_db")
         
-        # ★Gemmaモデルのパス
+        # モデルパス
         self.model_path = os.path.join(base_dir, "gguf", "gemma-2-2b-jpn-it-Q4_K_M.gguf")
         
         if not os.path.exists(self.knowledge_dir): os.makedirs(self.knowledge_dir)
@@ -36,23 +36,31 @@ class RAGManager:
                     embedding=True,
                     verbose=False,
                     n_ctx=2048,
-                    n_threads=6,    # ★6スレッド
-                    n_gpu_layers=0  # ★GPUオフ
+                    n_threads=6,
+                    n_gpu_layers=0
                 )
             except Exception as e:
                 return f"モデル読込エラー: {e}"
         return None
 
-    def build_database(self):
+    # ★修正箇所：callback（連絡先）を受け取れるようにしました
+    def build_database(self, callback=None):
+        # ヘルパー関数：画面とコンソールの両方にメッセージを送る
+        def report(msg):
+            print(msg) # コンソール用
+            if callback: callback(msg) # 画面用
+
         err = self._load_model()
-        if err: return err
+        if err: 
+            report(err)
+            return err
 
         files = glob.glob(os.path.join(self.knowledge_dir, "*.txt"))
         if not files: return "知識ファイル(.txt)がありません"
 
-        print(f"\n【検出ファイル一覧】")
-        for f in files: print(f" - {os.path.basename(f)}")
-        print("-" * 20)
+        report(f"【検出ファイル一覧】")
+        for f in files: report(f" - {os.path.basename(f)}")
+        report("-" * 20)
 
         new_chunks = []
         for file_path in files:
@@ -72,7 +80,7 @@ class RAGManager:
         if not new_chunks: return "有効なテキストがありませんでした"
 
         embeddings = []
-        print(f"ベクトル化開始 ({len(new_chunks)}件)...")
+        report(f"ベクトル化開始 ({len(new_chunks)}件)...")
         
         for i, chunk in enumerate(new_chunks):
             try:
@@ -81,8 +89,11 @@ class RAGManager:
                 if isinstance(raw_vec[0], list): raw_vec = raw_vec[0]
                 embeddings.append(raw_vec)
             except Exception as e:
-                print(f"Error chunk {i}: {e}")
-            if (i+1) % 10 == 0: print(f"{i+1}/{len(new_chunks)} 完了")
+                report(f"Error chunk {i}: {e}")
+            
+            # ★進捗を画面に報告！
+            if (i+1) % 5 == 0: 
+                report(f"進捗: {i+1}/{len(new_chunks)} 完了")
 
         if not embeddings: return "ベクトル化失敗"
 
@@ -96,7 +107,6 @@ class RAGManager:
 
         if not os.path.exists(self.db_path): os.makedirs(self.db_path)
         
-        # ★日本語パス対策保存
         try:
             fd, temp_path = tempfile.mkstemp(suffix=".faiss")
             os.close(fd)
@@ -109,9 +119,13 @@ class RAGManager:
             with open(os.path.join(self.db_path, "chunks.pkl"), "wb") as f:
                 pickle.dump(self.chunks, f)
         except Exception as e:
-            return f"保存エラー: {e}"
+            msg = f"保存エラー: {e}"
+            report(msg)
+            return msg
 
-        return f"完了！ {len(new_chunks)}件処理しました。"
+        final_msg = f"完了！ {len(new_chunks)}件処理しました。"
+        report(final_msg)
+        return final_msg
 
     def get_context(self, query):
         if self.index is None or not self.chunks: return "", []
@@ -127,7 +141,7 @@ class RAGManager:
             if np_query.ndim > 2: np_query = np.squeeze(np_query)
             if np_query.ndim == 1: np_query = np.expand_dims(np_query, axis=0)
             
-            # ★100件から探す（埋もれたファイル救出）
+            # 100件から探す
             k = 100
             total = len(self.chunks)
             if k > total: k = total
@@ -145,7 +159,6 @@ class RAGManager:
                     try:
                         fname = chunk.split("【出典:")[1].split("】")[0]
                         
-                        # 公平フィルター：1ファイルにつき最大2件
                         count = file_counts.get(fname, 0)
                         if count >= 2: continue
                         
@@ -154,8 +167,7 @@ class RAGManager:
                         file_counts[fname] = count + 1
                         print(f"・採用: {fname}")
                         
-                        # 合計5件で十分
-                        if len(results) >= 5: break
+                        if len(results) >= 8: break
                     except: pass
             print("--------------------------------\n")
 
