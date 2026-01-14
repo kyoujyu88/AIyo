@@ -8,7 +8,7 @@ from config import ConfigManager
 from rag import RAGManager
 from engine import AIEngine
 
-# ★インデント（字下げ）を消すためのライブラリ
+# インデント削除用
 import textwrap 
 
 class AIChatApp:
@@ -130,11 +130,17 @@ class AIChatApp:
         if messagebox.askyesno("確認", "DBを更新しますか？\n（既存の知識は上書きされます）"):
             threading.Thread(target=self._run_build, daemon=True).start()
 
+    # ★修正箇所：リアルタイム報告を受け取って表示
     def _run_build(self):
         self.append_log("システム", "ベクトル化開始...時間がかかります...", "sys")
-        msg = self.rag.build_database()
+        
+        # 画面にメッセージを出すための関数
+        def update_ui(msg):
+             self.root.after(0, lambda: self.append_log("システム", msg, "sys"))
+        
+        # callback引数に渡す
+        msg = self.rag.build_database(callback=update_ui)
         self.root.after(0, lambda: messagebox.showinfo("完了", msg))
-        self.root.after(0, lambda: self.append_log("システム", msg, "sys"))
 
     def reload_model_list(self):
         d = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gguf")
@@ -168,7 +174,6 @@ class AIChatApp:
         self.config.save_settings(m)
         self.append_log("システム", f"モード: {m}", "sys")
 
-    # ★ここが最重要修正！
     def send(self):
         text = self.input_text.get("1.0", tk.END).strip()
         if not text: return
@@ -177,42 +182,49 @@ class AIChatApp:
         
         ctx, files = self.rag.get_context(text)
         
-        # 1. 指示文の作成
         if files:
             self.append_log("システム", f"参照: {', '.join(files)}", "rag")
-            # マニュアルがあるとき
-            instruction = f"【参照情報】に基づき、ユーザーの質問に回答してください。\n[参照情報]\n{ctx}"
+            rag_instruction = f"以下の【参照情報】を事実として、ユーザーの質問に答えてください。\n\n【参照情報】\n{ctx}"
         else:
-            # マニュアルがないとき（挨拶など）
-            instruction = "親切なアシスタントとして回答してください。"
+            rag_instruction = "ユーザーの質問に親切に答えてください。"
 
-        # 2. システムプロンプト
-        sys_p = self.system_prompt
-        if not sys_p: sys_p = "あなたは役に立つAIアシスタントです。"
+        sys_msg = self.system_prompt
+        if not sys_msg: sys_msg = "あなたは優秀なアシスタントです。"
 
-        # 3. モデル別プロンプト作成（インデント排除版！）
-        model_name = self.config.params.get("last_model", "").lower()
-        prompt = ""
-
-        if "gemma" in model_name:
-            # Gemma用
-            prompt = f"<start_of_turn>user\n{sys_p}\n\n{instruction}\n\nQuestion:\n{text}<end_of_turn>\n<start_of_turn>model\n"
+        current_model_name = self.config.params.get("last_model", "").lower()
         
-        elif "llama-3" in model_name or "elyza" in model_name:
-            # ELYZA/Llama-3用：【重要】冒頭の <|begin_of_text|> を削除しました！
-            # ライブラリが自動で付けるので、自分で書くと重複してバグります。
-            prompt = f"<|start_header_id|>system<|end_header_id|>\n\n{sys_p}\n{instruction}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n"
-            
+        if "gemma" in current_model_name:
+            prompt = f"""<start_of_turn>user
+{sys_msg}
+
+{rag_instruction}
+
+【ユーザーの質問】
+{text}<end_of_turn>
+<start_of_turn>model
+"""
+        elif "llama-3" in current_model_name or "elyza" in current_model_name:
+            prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+{sys_msg}
+{rag_instruction}<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+{text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>"""
+
         else:
-            # その他
-            prompt = f"{sys_p}\n\n{instruction}\n\nユーザー: {text}\nシステム:"
+            prompt = f"""
+{sys_msg}
+
+{rag_instruction}
+
+ユーザー: {text}
+システム:
+"""
+        
+        prompt = prompt.strip()
 
         self.stop_btn.config(state="normal", bg="#ff4500")
-        
-        # デバッグ：実際に送る文字を黒い画面に出す
-        print(f"DEBUG: Model={model_name}")
-        print(f"DEBUG: Prompt (First 50 chars) = {prompt[:50]}...")
-        
+        print(f"DEBUG: Model={current_model_name}, PromptLen={len(prompt)}")
         threading.Thread(target=self._gen_th, args=(prompt,), daemon=True).start()
 
     def _gen_th(self, prompt):
@@ -225,7 +237,6 @@ class AIChatApp:
                     if self.engine.stop_flag: break
                     t = x['choices'][0]['text']
                     full += t
-                    # 画面更新
                     self.root.after(0, lambda chunk=t: self._insert_chunk(chunk))
             except Exception as e:
                 print(f"Gen Error: {e}")
