@@ -31,7 +31,7 @@ class ConfigManager:
             "proofread": os.path.join(self.prompt_dir, "proofread_prompt.txt")
         }
         
-        # 初回起動時に空のプロンプトファイルを作成しておく（便利機能）
+        # 初回起動時に空のプロンプトファイルを作成
         for path in self.prompt_files.values():
             if not os.path.exists(path):
                 with open(path, "w", encoding="utf-8") as f:
