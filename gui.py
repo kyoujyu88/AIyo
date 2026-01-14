@@ -31,51 +31,46 @@ class AIChatApp:
         self.update_system_stats()
 
     def _setup_ui(self):
-        # 1. 上部エリア (固定)
+        # 1. 上部エリア
         top = tk.Frame(self.root, bg="#e0e0e0", pady=5); top.pack(side=tk.TOP, fill=tk.X)
         
-        # 左側：モデル操作・モニター
         tk.Label(top, text="モデル:", bg="#e0e0e0").pack(side=tk.LEFT, padx=5)
         self.model_combo = ttk.Combobox(top, width=30, state="readonly")
         self.model_combo.pack(side=tk.LEFT, padx=5)
         tk.Button(top, text="読込", command=self.load_model, bg="#98fb98").pack(side=tk.LEFT, padx=5)
         tk.Button(top, text="📊 CPU詳細", command=self.open_cpu_monitor, bg="#dda0dd").pack(side=tk.LEFT, padx=5)
         
-        # 右側：各種ツール
         tk.Button(top, text="🔄 DB更新", command=self.build_vector_db, bg="#ff7f50").pack(side=tk.RIGHT, padx=2)
         tk.Button(top, text="📚 知識", command=self.rag.open_folder, bg="#ffd700").pack(side=tk.RIGHT, padx=2)
         tk.Button(top, text="📝 プロンプト", command=self.open_prompt, bg="#fffacd").pack(side=tk.RIGHT, padx=2)
         tk.Button(top, text="⚙ 設定", command=self.open_settings, bg="#dcdcdc").pack(side=tk.RIGHT, padx=2)
 
-        # 2. モードエリア (固定)
+        # 2. モードエリア
         mode_f = tk.Frame(self.root, bg="#f8f8ff", pady=5); mode_f.pack(side=tk.TOP, fill=tk.X)
         tk.Label(mode_f, text="モード:", bg="#f8f8ff").pack(side=tk.LEFT, padx=10)
         tk.Radiobutton(mode_f, text="通常", variable=self.current_mode, value="normal", command=self.on_mode_change, bg="#f8f8ff").pack(side=tk.LEFT)
         tk.Radiobutton(mode_f, text="校正", variable=self.current_mode, value="proofread", command=self.on_mode_change, bg="#f8f8ff").pack(side=tk.LEFT)
 
-        # 3. ステータスバー (最下部固定)
+        # 3. ステータスバー
         self.status_label = tk.Label(self.root, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.E)
         self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
 
-        # 4. メインエリア（PanedWindowで上下分割！）
+        # 4. メインエリア（PanedWindowで上下分割）
         self.paned = tk.PanedWindow(self.root, orient=tk.VERTICAL, sashrelief=tk.RAISED, sashwidth=6)
         self.paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # --- 上半分：ログエリア ---
+        # 上：ログエリア
         self.log = scrolledtext.ScrolledText(self.paned, font=("Meiryo", 11), state='disabled')
         self.log.tag_config("user", foreground="#0000cd", font=("Meiryo", 11, "bold"))
         self.log.tag_config("ai", foreground="#228b22", font=("Meiryo", 11, "bold"))
         self.log.tag_config("sys", foreground="#808080", font=("Meiryo", 9))
         self.log.tag_config("rag", foreground="#ff8c00", font=("Meiryo", 9))
-        
-        # PanedWindowに追加 (heightで初期の高さを指定)
         self.paned.add(self.log, stretch="always", height=500) 
 
-        # --- 下半分：入力エリア ---
+        # 下：入力エリア
         input_frame = tk.Frame(self.paned, bg="#f0f0f0")
         self.paned.add(input_frame, stretch="never", height=150)
 
-        # 入力エリアの中身配置
         bf = tk.Frame(input_frame, bg="#f0f0f0"); bf.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
         tk.Button(bf, text="送信", command=self.send, bg="#ffb6c1", width=10, height=2).pack(pady=2)
         self.stop_btn = tk.Button(bf, text="停止", command=self.engine.stop, state="disabled", width=10); self.stop_btn.pack(pady=2)
@@ -167,14 +162,13 @@ class AIChatApp:
 
     def on_mode_change(self):
         m = self.current_mode.get()
-        # ★モード変更時に最新のプロンプトファイルを読み込む
         self.system_prompt = self.config.get_system_prompt(m)
         self.config.params["temperature"] = self.config.normal_temperature if m=="normal" else 0.0
         self.history = self.system_prompt + "\n"
         self.config.save_settings(m)
         self.append_log("システム", f"モード: {m}", "sys")
 
-    # ★最重要：送信処理（自動モデル切替 & プロンプト反映）
+    # ★修正された送信処理
     def send(self):
         text = self.input_text.get("1.0", tk.END).strip()
         if not text: return
@@ -183,55 +177,50 @@ class AIChatApp:
         
         # 1. RAG検索
         ctx, files = self.rag.get_context(text)
-        if files: self.append_log("システム", f"参照: {', '.join(files)}", "rag")
-        
-        # 2. 設定ファイルのシステムプロンプトを読み込む
-        sys_msg = self.system_prompt
-        if not sys_msg: sys_msg = "あなたは役に立つAIアシスタントです。"
+        if files:
+            self.append_log("システム", f"参照: {', '.join(files)}", "rag")
+            rag_instruction = f"以下の【参照情報】を事実として、ユーザーの質問に答えてください。\n\n【参照情報】\n{ctx}"
+        else:
+            rag_instruction = "ユーザーの質問に親切に答えてください。"
 
-        # 3. モデル名をチェックして話し方を切り替える
+        # 2. システムプロンプト
+        sys_msg = self.system_prompt
+        if not sys_msg: sys_msg = "あなたは優秀なアシスタントです。"
+
+        # 3. プロンプト作成（空白削除・モデル別対応）
         current_model_name = self.config.params.get("last_model", "").lower()
         
         if "gemma" in current_model_name:
-            # Gemma用（ユーザー発言の中にシステム指示を混ぜる）
             prompt = f"""<start_of_turn>user
 {sys_msg}
 
-以下の【参照情報】に基づいて、ユーザーの質問に答えてください。
-
-【参照情報】
-{ctx}
+{rag_instruction}
 
 【ユーザーの質問】
 {text}<end_of_turn>
 <start_of_turn>model
 """
         elif "llama-3" in current_model_name or "elyza" in current_model_name:
-             # Llama-3/ELYZA用（システムタグ使用）
-             prompt = f"""
-<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+             # タグの前後に余計な空白が入らないように注意
+            prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
 
 {sys_msg}
-以下の【参照情報】のみに基づいて回答してください。
-{ctx}<|eot_id|><|start_header_id|>user<|end_header_id|>
+{rag_instruction}<|eot_id|><|start_header_id|>user<|end_header_id|>
 
-{text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-"""
+{text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>"""
         else:
-            # 汎用
             prompt = f"""
 {sys_msg}
 
-以下は、ユーザーとAIアシスタントの会話です。
-AIは【参照情報】の内容を元に、ユーザーの質問に答えます。
-
-【参照情報】
-{ctx}
+{rag_instruction}
 
 ユーザー: {text}
 システム:
 """
         
+        # 前後の空白を完全削除
+        prompt = prompt.strip()
+
         self.stop_btn.config(state="normal", bg="#ff4500")
         print(f"DEBUG: Model={current_model_name}, PromptLen={len(prompt)}")
         threading.Thread(target=self._gen_th, args=(prompt,), daemon=True).start()
