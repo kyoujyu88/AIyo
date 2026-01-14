@@ -14,7 +14,7 @@ class AIEngine:
         
         try:
             threads = self.config.params.get("n_threads", 6)
-            n_ctx = self.config.params.get("n_ctx", 2048)
+            n_ctx = self.config.params.get("n_ctx", 8192)
             
             print(f"DEBUG: モデル読込開始 (Threads={threads}, ctx={n_ctx})")
             
@@ -22,8 +22,8 @@ class AIEngine:
                 model_path=path,
                 n_ctx=n_ctx,
                 n_threads=threads,
-                n_gpu_layers=0,
-                verbose=True # ★詳細なログを出すように変更
+                n_gpu_layers=0, # ★GPUオフ（事務所PC用）
+                verbose=True 
             )
             return True, os.path.basename(path)
         except Exception as e:
@@ -36,13 +36,9 @@ class AIEngine:
             return None
         
         self.stop_flag = False
-        
-        # ★プロンプトの長さをチェック
-        # 日本語はざっくり文字数くらいがトークン数の目安
         print(f"DEBUG: 生成リクエスト受信。文字数: {len(prompt)}")
         
         try:
-            # 生成開始
             stream = self.llm(
                 prompt,
                 max_tokens=self.config.params["max_tokens"],
@@ -55,13 +51,9 @@ class AIEngine:
             return stream
             
         except Exception as e:
-            # ★ここでエラーの正体を暴く！
             print(f"\n!!!!!!!! エラー発生 !!!!!!!!\n{e}\n!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
-            
-            # コンテキスト長あふれの場合のヒント
             if "exceeds context window" in str(e):
-                print("ヒント: n_ctx のサイズが足りていません。")
-                
+                print("ヒント: n_ctx のサイズが足りていません。config.pyを確認してください。")
             return None
 
     def stop(self):
