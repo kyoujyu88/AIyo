@@ -13,7 +13,7 @@ class RAGManager:
         self.knowledge_dir = os.path.join(base_dir, "knowledge")
         self.db_path = os.path.join(base_dir, "vector_db")
         
-        # ★Gemmaモデルのパス（ここが合っているか確認！）
+        # ★Gemmaモデルのパス
         self.model_path = os.path.join(base_dir, "gguf", "gemma-2-2b-jpn-it-Q4_K_M.gguf")
         
         if not os.path.exists(self.knowledge_dir): os.makedirs(self.knowledge_dir)
@@ -36,7 +36,7 @@ class RAGManager:
                     embedding=True,
                     verbose=False,
                     n_ctx=2048,
-                    n_threads=6,    # ★ここも6スレッドに制限
+                    n_threads=6,    # ★6スレッド
                     n_gpu_layers=0  # ★GPUオフ
                 )
             except Exception as e:
@@ -61,7 +61,6 @@ class RAGManager:
                     text = f.read()
                     filename = os.path.basename(file_path)
                     
-                    # チャンク分割
                     chunk_size = 300
                     overlap = 50
                     for i in range(0, len(text), chunk_size - overlap):
@@ -87,18 +86,17 @@ class RAGManager:
 
         if not embeddings: return "ベクトル化失敗"
 
-        # 整形
         np_embeddings = np.array(embeddings)
         if np_embeddings.ndim > 2: np_embeddings = np.squeeze(np_embeddings)
         
-        # FAISSインデックス作成
         dimension = np_embeddings.shape[1]
         self.index = faiss.IndexFlatL2(dimension)
         self.index.add(np_embeddings.astype('float32'))
         self.chunks = new_chunks
 
-        # ★最強の保存処理（日本語パス対策）
         if not os.path.exists(self.db_path): os.makedirs(self.db_path)
+        
+        # ★日本語パス対策保存
         try:
             fd, temp_path = tempfile.mkstemp(suffix=".faiss")
             os.close(fd)
@@ -129,7 +127,7 @@ class RAGManager:
             if np_query.ndim > 2: np_query = np.squeeze(np_query)
             if np_query.ndim == 1: np_query = np.expand_dims(np_query, axis=0)
             
-            # ★100件取得して重複を除外する（埋もれたファイル救出作戦）
+            # ★100件から探す（埋もれたファイル救出）
             k = 100
             total = len(self.chunks)
             if k > total: k = total
@@ -147,7 +145,7 @@ class RAGManager:
                     try:
                         fname = chunk.split("【出典:")[1].split("】")[0]
                         
-                        # 公平フィルター：1ファイルにつき最大2件まで
+                        # 公平フィルター：1ファイルにつき最大2件
                         count = file_counts.get(fname, 0)
                         if count >= 2: continue
                         
@@ -156,6 +154,7 @@ class RAGManager:
                         file_counts[fname] = count + 1
                         print(f"・採用: {fname}")
                         
+                        # 合計5件で十分
                         if len(results) >= 5: break
                     except: pass
             print("--------------------------------\n")
