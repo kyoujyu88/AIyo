@@ -11,7 +11,7 @@ from engine import AIEngine
 class AIChatApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("AI Assistant (Office Edition)") # タイトル変更
+        self.root.title("AI Assistant (Office PC Edition)")
         self.root.geometry("950x850")
         
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -31,55 +31,65 @@ class AIChatApp:
         self.update_system_stats()
 
     def _setup_ui(self):
-        # 上部エリア
+        # 1. 上部エリア (固定)
         top = tk.Frame(self.root, bg="#e0e0e0", pady=5); top.pack(side=tk.TOP, fill=tk.X)
+        
         tk.Label(top, text="モデル:", bg="#e0e0e0").pack(side=tk.LEFT, padx=5)
         self.model_combo = ttk.Combobox(top, width=30, state="readonly")
         self.model_combo.pack(side=tk.LEFT, padx=5)
         tk.Button(top, text="読込", command=self.load_model, bg="#98fb98").pack(side=tk.LEFT, padx=5)
-        
-        # モニターボタン（i3でもカッコよく表示されます！）
         tk.Button(top, text="📊 CPU詳細", command=self.open_cpu_monitor, bg="#dda0dd").pack(side=tk.LEFT, padx=5)
         
         tk.Button(top, text="🔄 DB更新", command=self.build_vector_db, bg="#ff7f50").pack(side=tk.RIGHT, padx=2)
         tk.Button(top, text="📚 知識", command=self.rag.open_folder, bg="#ffd700").pack(side=tk.RIGHT, padx=2)
+        tk.Button(top, text="📝 プロンプト", command=self.open_prompt, bg="#fffacd").pack(side=tk.RIGHT, padx=2)
         tk.Button(top, text="⚙ 設定", command=self.open_settings, bg="#dcdcdc").pack(side=tk.RIGHT, padx=2)
 
-        # モードエリア
+        # 2. モードエリア (固定)
         mode_f = tk.Frame(self.root, bg="#f8f8ff", pady=5); mode_f.pack(side=tk.TOP, fill=tk.X)
         tk.Label(mode_f, text="モード:", bg="#f8f8ff").pack(side=tk.LEFT, padx=10)
         tk.Radiobutton(mode_f, text="通常", variable=self.current_mode, value="normal", command=self.on_mode_change, bg="#f8f8ff").pack(side=tk.LEFT)
         tk.Radiobutton(mode_f, text="校正", variable=self.current_mode, value="proofread", command=self.on_mode_change, bg="#f8f8ff").pack(side=tk.LEFT)
 
-        # ログエリア
-        self.log = scrolledtext.ScrolledText(self.root, font=("Meiryo", 11), state='disabled', padx=10, pady=10)
-        self.log.pack(expand=True, fill=tk.BOTH, padx=5, pady=5)
+        # 3. ステータスバー (最下部固定)
+        self.status_label = tk.Label(self.root, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.E)
+        self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
+
+        # ★ 4. メインエリア（PanedWindowで上下分割！）★
+        # orient=tk.VERTICAL で「上下」に分けます
+        self.paned = tk.PanedWindow(self.root, orient=tk.VERTICAL, sashrelief=tk.RAISED, sashwidth=6)
+        self.paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        # --- 上半分：ログエリア ---
+        self.log = scrolledtext.ScrolledText(self.paned, font=("Meiryo", 11), state='disabled')
         self.log.tag_config("user", foreground="#0000cd", font=("Meiryo", 11, "bold"))
         self.log.tag_config("ai", foreground="#228b22", font=("Meiryo", 11, "bold"))
         self.log.tag_config("sys", foreground="#808080", font=("Meiryo", 9))
         self.log.tag_config("rag", foreground="#ff8c00", font=("Meiryo", 9))
+        
+        # PanedWindowに追加（weight=1は、画面を広げた時にこっちを優先して広げる設定）
+        self.paned.add(self.log, stretch="always", height=500) 
 
-        # 入力エリア
-        btm = tk.Frame(self.root, bg="#f0f0f0", pady=5); btm.pack(side=tk.BOTTOM, fill=tk.X)
-        bf = tk.Frame(btm, bg="#f0f0f0"); bf.pack(side=tk.RIGHT, padx=5)
+        # --- 下半分：入力エリア ---
+        input_frame = tk.Frame(self.paned, bg="#f0f0f0")
+        self.paned.add(input_frame, stretch="never", height=150) # 初期高さを指定
+
+        # 入力エリアの中身
+        bf = tk.Frame(input_frame, bg="#f0f0f0"); bf.pack(side=tk.RIGHT, fill=tk.Y, padx=5, pady=5)
         tk.Button(bf, text="送信", command=self.send, bg="#ffb6c1", width=10, height=2).pack(pady=2)
         self.stop_btn = tk.Button(bf, text="停止", command=self.engine.stop, state="disabled", width=10); self.stop_btn.pack(pady=2)
         tk.Button(bf, text="📂 読込", command=self.load_file, bg="#87ceeb", width=10).pack(pady=2)
         
-        self.input_text = scrolledtext.ScrolledText(btm, font=("Meiryo", 11), height=4)
-        self.input_text.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        self.input_text = scrolledtext.ScrolledText(input_frame, font=("Meiryo", 11))
+        self.input_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
         self.input_text.bind("<Return>", lambda e: (self.send(), "break")[1])
 
-        # ステータスバー
-        self.status_label = tk.Label(self.root, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.E)
-        self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
-
-    # --- CPU Monitor (Dynamic) ---
+    # --- CPU Monitor ---
     def open_cpu_monitor(self):
         win = tk.Toplevel(self.root)
-        count = psutil.cpu_count() # i3なら8スレッド
+        count = psutil.cpu_count()
         win.title(f"CPU Monitor ({count} Threads)")
-        win.geometry("650x400") # 高さを少し調整
+        win.geometry("650x400")
         win.configure(bg="#1a1a1a")
         
         canvas = tk.Canvas(win, bg="#1a1a1a"); canvas.pack(side="left", fill="both", expand=True)
@@ -91,7 +101,6 @@ class AIChatApp:
 
         bars = []
         labels = []
-        # i3なら8個なので、2列x4行できれいに収まります
         for i in range(count):
             r, c = i // 2, i % 2
             f = tk.Frame(sf, bg="#1a1a1a", pady=5, padx=10); f.grid(row=r, column=c, sticky="ew")
@@ -126,7 +135,7 @@ class AIChatApp:
             threading.Thread(target=self._run_build, daemon=True).start()
 
     def _run_build(self):
-        self.append_log("システム", "ベクトル化開始...時間がかかります...", "sys")
+        self.append_log("システム", "ベクトル化開始...", "sys")
         msg = self.rag.build_database()
         self.root.after(0, lambda: messagebox.showinfo("完了", msg))
         self.root.after(0, lambda: self.append_log("システム", msg, "sys"))
@@ -172,10 +181,42 @@ class AIChatApp:
         ctx, files = self.rag.get_context(text)
         if files: self.append_log("システム", f"参照: {', '.join(files)}", "rag")
         
-        prompt = f"{self.history}{ctx}ユーザー: {text}\nシステム:"
-        self.history += f"ユーザー: {text}\nシステム:"
+        current_model_name = self.config.params.get("last_model", "").lower()
+        
+        if "gemma" in current_model_name:
+            prompt = f"""<start_of_turn>user
+以下の【参照情報】に基づいて、ユーザーの質問に日本語で答えてください。
+
+【参照情報】
+{ctx}
+
+【ユーザーの質問】
+{text}<end_of_turn>
+<start_of_turn>model
+"""
+        elif "llama-3" in current_model_name or "elyza" in current_model_name:
+             prompt = f"""
+<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+あなたは誠実なアシスタントです。以下の【参照情報】のみに基づいて回答してください。
+{ctx}<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+{text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+"""
+        else:
+            prompt = f"""
+以下は、ユーザーとAIアシスタントの会話です。
+AIは【参照情報】の内容を元に、ユーザーの質問に答えます。
+
+【参照情報】
+{ctx}
+
+ユーザー: {text}
+システム:
+"""
         
         self.stop_btn.config(state="normal", bg="#ff4500")
+        print(f"DEBUG: Model={current_model_name}, PromptLen={len(prompt)}")
         threading.Thread(target=self._gen_th, args=(prompt,), daemon=True).start()
 
     def _gen_th(self, prompt):
@@ -199,6 +240,13 @@ class AIChatApp:
             if t:
                 self.append_log("システム", f"読込: {os.path.basename(path)}", "sys")
                 self.history += f"ユーザー: 以下を読んで。\n{t[:1000]}\nシステム: はい。\n"
+
+    def open_prompt(self):
+        path = self.config.prompt_files.get(self.current_mode.get())
+        if path and os.path.exists(path):
+            os.startfile(path)
+        else:
+            messagebox.showerror("エラー", "プロンプトファイルが見つかりません")
 
     def open_settings(self):
         sw = tk.Toplevel(self.root); sw.title("設定")
