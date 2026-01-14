@@ -8,10 +8,13 @@ from config import ConfigManager
 from rag import RAGManager
 from engine import AIEngine
 
+# ★インデント（字下げ）を消すためのライブラリ
+import textwrap 
+
 class AIChatApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("AI Assistant (Office PC Edition)")
+        self.root.title("AI Assistant (Office PC Final)")
         self.root.geometry("950x850")
         
         base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -33,7 +36,6 @@ class AIChatApp:
     def _setup_ui(self):
         # 1. 上部エリア
         top = tk.Frame(self.root, bg="#e0e0e0", pady=5); top.pack(side=tk.TOP, fill=tk.X)
-        
         tk.Label(top, text="モデル:", bg="#e0e0e0").pack(side=tk.LEFT, padx=5)
         self.model_combo = ttk.Combobox(top, width=30, state="readonly")
         self.model_combo.pack(side=tk.LEFT, padx=5)
@@ -55,11 +57,10 @@ class AIChatApp:
         self.status_label = tk.Label(self.root, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.E)
         self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
 
-        # 4. メインエリア（PanedWindowで上下分割）
+        # 4. メインエリア
         self.paned = tk.PanedWindow(self.root, orient=tk.VERTICAL, sashrelief=tk.RAISED, sashwidth=6)
         self.paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        # 上：ログエリア
         self.log = scrolledtext.ScrolledText(self.paned, font=("Meiryo", 11), state='disabled')
         self.log.tag_config("user", foreground="#0000cd", font=("Meiryo", 11, "bold"))
         self.log.tag_config("ai", foreground="#228b22", font=("Meiryo", 11, "bold"))
@@ -67,7 +68,6 @@ class AIChatApp:
         self.log.tag_config("rag", foreground="#ff8c00", font=("Meiryo", 9))
         self.paned.add(self.log, stretch="always", height=500) 
 
-        # 下：入力エリア
         input_frame = tk.Frame(self.paned, bg="#f0f0f0")
         self.paned.add(input_frame, stretch="never", height=150)
 
@@ -168,61 +168,51 @@ class AIChatApp:
         self.config.save_settings(m)
         self.append_log("システム", f"モード: {m}", "sys")
 
-    # ★修正された送信処理
+    # ★ここが最重要修正！
     def send(self):
         text = self.input_text.get("1.0", tk.END).strip()
         if not text: return
         self.input_text.delete("1.0", tk.END)
         self.append_log("あなた", text, "user")
         
-        # 1. RAG検索
         ctx, files = self.rag.get_context(text)
+        
+        # 1. 指示文の作成
         if files:
             self.append_log("システム", f"参照: {', '.join(files)}", "rag")
-            rag_instruction = f"以下の【参照情報】を事実として、ユーザーの質問に答えてください。\n\n【参照情報】\n{ctx}"
+            # マニュアルがあるとき
+            instruction = f"【参照情報】に基づき、ユーザーの質問に回答してください。\n[参照情報]\n{ctx}"
         else:
-            rag_instruction = "ユーザーの質問に親切に答えてください。"
+            # マニュアルがないとき（挨拶など）
+            instruction = "親切なアシスタントとして回答してください。"
 
         # 2. システムプロンプト
-        sys_msg = self.system_prompt
-        if not sys_msg: sys_msg = "あなたは優秀なアシスタントです。"
+        sys_p = self.system_prompt
+        if not sys_p: sys_p = "あなたは役に立つAIアシスタントです。"
 
-        # 3. プロンプト作成（空白削除・モデル別対応）
-        current_model_name = self.config.params.get("last_model", "").lower()
+        # 3. モデル別プロンプト作成（インデント排除版！）
+        model_name = self.config.params.get("last_model", "").lower()
+        prompt = ""
+
+        if "gemma" in model_name:
+            # Gemma用
+            prompt = f"<start_of_turn>user\n{sys_p}\n\n{instruction}\n\nQuestion:\n{text}<end_of_turn>\n<start_of_turn>model\n"
         
-        if "gemma" in current_model_name:
-            prompt = f"""<start_of_turn>user
-{sys_msg}
-
-{rag_instruction}
-
-【ユーザーの質問】
-{text}<end_of_turn>
-<start_of_turn>model
-"""
-        elif "llama-3" in current_model_name or "elyza" in current_model_name:
-             # タグの前後に余計な空白が入らないように注意
-            prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-
-{sys_msg}
-{rag_instruction}<|eot_id|><|start_header_id|>user<|end_header_id|>
-
-{text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>"""
+        elif "llama-3" in model_name or "elyza" in model_name:
+            # ELYZA/Llama-3用：【重要】冒頭の <|begin_of_text|> を削除しました！
+            # ライブラリが自動で付けるので、自分で書くと重複してバグります。
+            prompt = f"<|start_header_id|>system<|end_header_id|>\n\n{sys_p}\n{instruction}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n"
+            
         else:
-            prompt = f"""
-{sys_msg}
-
-{rag_instruction}
-
-ユーザー: {text}
-システム:
-"""
-        
-        # 前後の空白を完全削除
-        prompt = prompt.strip()
+            # その他
+            prompt = f"{sys_p}\n\n{instruction}\n\nユーザー: {text}\nシステム:"
 
         self.stop_btn.config(state="normal", bg="#ff4500")
-        print(f"DEBUG: Model={current_model_name}, PromptLen={len(prompt)}")
+        
+        # デバッグ：実際に送る文字を黒い画面に出す
+        print(f"DEBUG: Model={model_name}")
+        print(f"DEBUG: Prompt (First 50 chars) = {prompt[:50]}...")
+        
         threading.Thread(target=self._gen_th, args=(prompt,), daemon=True).start()
 
     def _gen_th(self, prompt):
@@ -230,14 +220,24 @@ class AIChatApp:
         if res:
             self.root.after(0, lambda: self.append_log("AI", "", "ai"))
             full = ""
-            for x in res:
-                if self.engine.stop_flag: break
-                t = x['choices'][0]['text']
-                full += t
-                self.root.after(0, lambda: self.log.insert(tk.END, t))
-                self.root.after(0, lambda: self.log.see(tk.END))
+            try:
+                for x in res:
+                    if self.engine.stop_flag: break
+                    t = x['choices'][0]['text']
+                    full += t
+                    # 画面更新
+                    self.root.after(0, lambda chunk=t: self._insert_chunk(chunk))
+            except Exception as e:
+                print(f"Gen Error: {e}")
+            
             self.history += f" {full}\n"
         self.root.after(0, lambda: self.stop_btn.config(state="disabled", bg="#f0f0f0"))
+
+    def _insert_chunk(self, text):
+        self.log.config(state='normal')
+        self.log.insert(tk.END, text)
+        self.log.see(tk.END)
+        self.log.config(state='disabled')
 
     def load_file(self):
         path = filedialog.askopenfilename()
