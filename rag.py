@@ -13,10 +13,10 @@ class RAGManager:
         self.knowledge_dir = os.path.join(base_dir, "knowledge")
         self.db_path = os.path.join(base_dir, "vector_db")
         
-        # ★ここ重要！篤志くんのGemmaモデルのファイル名と完全に一致させてください
+        # 篤志くんのGemmaモデル
         self.model_path = os.path.join(base_dir, "gguf", "gemma-2-2b-jpn-it-Q4_K_M.gguf")
         
-        # フォルダがなければ作る
+        # フォルダ作成
         if not os.path.exists(self.knowledge_dir): os.makedirs(self.knowledge_dir)
         if not os.path.exists(self.db_path): os.makedirs(self.db_path)
 
@@ -32,7 +32,6 @@ class RAGManager:
             if not os.path.exists(self.model_path):
                 return f"モデルが見つかりません: {self.model_path}"
             try:
-                # embedding=True でベクトル化モード起動
                 self.embed_model = Llama(
                     model_path=self.model_path,
                     embedding=True,
@@ -50,7 +49,7 @@ class RAGManager:
         files = glob.glob(os.path.join(self.knowledge_dir, "*.txt"))
         if not files: return "知識ファイル(.txt)がありません"
 
-        # ★検出ファイルをログに出す
+        # 検出ファイルをログに出す
         print(f"\n【検出されたファイル】")
         for f in files:
             print(f" - {os.path.basename(f)}")
@@ -63,7 +62,7 @@ class RAGManager:
                     text = f.read()
                     filename = os.path.basename(file_path)
                     
-                    # チャンク分割設定 (Gemma向けに少し小さめ)
+                    # Gemma向けチャンク設定
                     chunk_size = 250
                     overlap = 30
                     for i in range(0, len(text), chunk_size - overlap):
@@ -81,8 +80,6 @@ class RAGManager:
             try:
                 vec = self.embed_model.create_embedding(chunk)
                 raw_vec = vec['data'][0]['embedding']
-                
-                # Gemma特有の「リストの入れ子」を解消
                 if isinstance(raw_vec[0], list): raw_vec = raw_vec[0]
                 embeddings.append(raw_vec)
             except Exception as e:
@@ -92,36 +89,30 @@ class RAGManager:
 
         if not embeddings: return "ベクトル化に失敗しました"
 
-        # NumPy配列へ変換・整形 (Squeeze)
         np_embeddings = np.array(embeddings)
         if np_embeddings.ndim > 2: np_embeddings = np.squeeze(np_embeddings)
         
         print(f"データの形状: {np_embeddings.shape}")
 
-        # FAISSインデックス作成
         dimension = np_embeddings.shape[1]
         self.index = faiss.IndexFlatL2(dimension)
         self.index.add(np_embeddings.astype('float32'))
         self.chunks = new_chunks
 
-        # 保存用フォルダの再確認
         if not os.path.exists(self.db_path):
             os.makedirs(self.db_path)
 
-        # ★日本語パス対策：Tempファイル経由で保存
+        # 日本語パス対策：Tempファイル経由保存
         try:
             fd, temp_path = tempfile.mkstemp(suffix=".faiss")
             os.close(fd)
             
-            # 一時ファイルに保存
             faiss.write_index(self.index, temp_path)
             
-            # 本番ファイルへ移動 (Pythonのshutilは日本語パスOK)
             target_path = os.path.join(self.db_path, "index.faiss")
             if os.path.exists(target_path): os.remove(target_path)
             shutil.move(temp_path, target_path)
             
-            # chunks.pklの保存
             with open(os.path.join(self.db_path, "chunks.pkl"), "wb") as f:
                 pickle.dump(self.chunks, f)
 
@@ -141,33 +132,46 @@ class RAGManager:
             query_vec = vec_res['data'][0]['embedding']
             if isinstance(query_vec[0], list): query_vec = query_vec[0]
             
-            # 整形
             np_query = np.array([query_vec]).astype('float32')
             if np_query.ndim > 2: np_query = np.squeeze(np_query)
             if np_query.ndim == 1: np_query = np.expand_dims(np_query, axis=0)
             
-            # ★検索数(k)を増やして、複数のファイルがヒットしやすくする
-            k = 6 
+            # ★公平フィルター：候補を広く(15件)取る
+            k = 15
             distances, indices = self.index.search(np_query, k)
             
             results = []
             source_files = []
+            file_counts = {} # ファイルごとの採用数をカウント
             
-            print("\n--- 検索ヒット状況 ---")
+            print("\n--- 検索ヒット状況 (公平フィルター) ---")
+            
             for i in indices[0]:
                 if i < len(self.chunks) and i >= 0:
                     chunk = self.chunks[i]
-                    results.append(chunk)
                     try:
                         fname = chunk.split("【出典:")[1].split("】")[0]
+                        
+                        # ★ここが重要！同じファイルからは最大2つまで
+                        current_count = file_counts.get(fname, 0)
+                        if current_count >= 2:
+                            print(f"・除外(重複): {fname}")
+                            continue # 次の候補へスキップ
+                        
+                        # 採用
+                        results.append(chunk)
                         if fname not in source_files: source_files.append(fname)
-                        print(f"・ヒット: {fname}") # デバッグ表示
+                        file_counts[fname] = current_count + 1
+                        print(f"・採用!: {fname}")
+                        
+                        # 合計5件集まったら十分
+                        if len(results) >= 5: break
+                        
                     except: pass
-            print("----------------------\n")
+            print("---------------------------------------\n")
 
             if results:
                 context_text = "\n\n".join(results)
-                # タイトルを少しリッチに
                 formatted = f"\n\n### 🧠 ベクトルDB検索結果 ###\n{context_text}\n#############################\n"
                 return formatted, source_files
         except Exception as e:
