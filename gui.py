@@ -8,9 +8,6 @@ from config import ConfigManager
 from rag import RAGManager
 from engine import AIEngine
 
-# インデント削除用
-import textwrap 
-
 class AIChatApp:
     def __init__(self, root):
         self.root = root
@@ -57,7 +54,7 @@ class AIChatApp:
         self.status_label = tk.Label(self.root, text="Ready", bd=1, relief=tk.SUNKEN, anchor=tk.E)
         self.status_label.pack(side=tk.BOTTOM, fill=tk.X)
 
-        # 4. メインエリア
+        # 4. メインエリア (PanedWindow)
         self.paned = tk.PanedWindow(self.root, orient=tk.VERTICAL, sashrelief=tk.RAISED, sashwidth=6)
         self.paned.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
@@ -130,15 +127,10 @@ class AIChatApp:
         if messagebox.askyesno("確認", "DBを更新しますか？\n（既存の知識は上書きされます）"):
             threading.Thread(target=self._run_build, daemon=True).start()
 
-    # ★修正箇所：リアルタイム報告を受け取って表示
     def _run_build(self):
         self.append_log("システム", "ベクトル化開始...時間がかかります...", "sys")
-        
-        # 画面にメッセージを出すための関数
         def update_ui(msg):
              self.root.after(0, lambda: self.append_log("システム", msg, "sys"))
-        
-        # callback引数に渡す
         msg = self.rag.build_database(callback=update_ui)
         self.root.after(0, lambda: messagebox.showinfo("完了", msg))
 
@@ -174,6 +166,7 @@ class AIChatApp:
         self.config.save_settings(m)
         self.append_log("システム", f"モード: {m}", "sys")
 
+    # ★最終版 send 関数
     def send(self):
         text = self.input_text.get("1.0", tk.END).strip()
         if not text: return
@@ -192,36 +185,20 @@ class AIChatApp:
         if not sys_msg: sys_msg = "あなたは優秀なアシスタントです。"
 
         current_model_name = self.config.params.get("last_model", "").lower()
+        prompt = ""
         
+        # モデル別プロンプト作成（空白徹底排除）
         if "gemma" in current_model_name:
-            prompt = f"""<start_of_turn>user
-{sys_msg}
-
-{rag_instruction}
-
-【ユーザーの質問】
-{text}<end_of_turn>
-<start_of_turn>model
-"""
-        elif "llama-3" in current_model_name or "elyza" in current_model_name:
-            prompt = f"""<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-
-{sys_msg}
-{rag_instruction}<|eot_id|><|start_header_id|>user<|end_header_id|>
-
-{text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>"""
-
-        else:
-            prompt = f"""
-{sys_msg}
-
-{rag_instruction}
-
-ユーザー: {text}
-システム:
-"""
+            prompt = f"<start_of_turn>user\n{sys_msg}\n\n{rag_instruction}\n\n【ユーザーの質問】\n{text}<end_of_turn>\n<start_of_turn>model\n"
         
-        prompt = prompt.strip()
+        elif "llama-3" in current_model_name or "elyza" in current_model_name:
+            # begin_of_text は削除
+            prompt = f"<|start_header_id|>system<|end_header_id|>\n\n{sys_msg}\n{rag_instruction}<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n{text}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n"
+            
+        else:
+            prompt = f"{sys_msg}\n\n{rag_instruction}\n\nユーザー: {text}\nシステム:"
+        
+        prompt = prompt.strip() # 最終クリーニング
 
         self.stop_btn.config(state="normal", bg="#ff4500")
         print(f"DEBUG: Model={current_model_name}, PromptLen={len(prompt)}")
