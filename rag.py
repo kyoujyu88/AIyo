@@ -13,7 +13,7 @@ class RAGManager:
         self.knowledge_dir = os.path.join(base_dir, "knowledge")
         self.db_path = os.path.join(base_dir, "vector_db")
         
-        # モデルパス
+        # モデルパス（Gemmaをデフォルトにしていますが、環境に合わせて変更可）
         self.model_path = os.path.join(base_dir, "gguf", "gemma-2-2b-jpn-it-Q4_K_M.gguf")
         
         if not os.path.exists(self.knowledge_dir): os.makedirs(self.knowledge_dir)
@@ -43,12 +43,10 @@ class RAGManager:
                 return f"モデル読込エラー: {e}"
         return None
 
-    # ★修正箇所：callback（連絡先）を受け取れるようにしました
     def build_database(self, callback=None):
-        # ヘルパー関数：画面とコンソールの両方にメッセージを送る
         def report(msg):
-            print(msg) # コンソール用
-            if callback: callback(msg) # 画面用
+            print(msg)
+            if callback: callback(msg)
 
         err = self._load_model()
         if err: 
@@ -91,7 +89,6 @@ class RAGManager:
             except Exception as e:
                 report(f"Error chunk {i}: {e}")
             
-            # ★進捗を画面に報告！
             if (i+1) % 5 == 0: 
                 report(f"進捗: {i+1}/{len(new_chunks)} 完了")
 
@@ -141,10 +138,9 @@ class RAGManager:
             if np_query.ndim > 2: np_query = np.squeeze(np_query)
             if np_query.ndim == 1: np_query = np.expand_dims(np_query, axis=0)
             
-            # 100件から探す
-            k = 100
-            total = len(self.chunks)
-            if k > total: k = total
+            # ★全件検索（埋もれ防止）
+            k = len(self.chunks)
+            if k == 0: k = 1
             
             distances, indices = self.index.search(np_query, k)
             
@@ -152,13 +148,14 @@ class RAGManager:
             source_files = []
             file_counts = {}
             
-            print("\n--- 検索ヒット状況 (Top選抜) ---")
+            print(f"\n--- 検索ヒット状況 (全{k}件から選抜) ---")
             for i in indices[0]:
                 if i < len(self.chunks) and i >= 0:
                     chunk = self.chunks[i]
                     try:
                         fname = chunk.split("【出典:")[1].split("】")[0]
                         
+                        # 重複制限 (2件まで)
                         count = file_counts.get(fname, 0)
                         if count >= 2: continue
                         
@@ -167,6 +164,7 @@ class RAGManager:
                         file_counts[fname] = count + 1
                         print(f"・採用: {fname}")
                         
+                        # ★採用件数を8件に増量！
                         if len(results) >= 8: break
                     except: pass
             print("--------------------------------\n")
