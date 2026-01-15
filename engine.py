@@ -22,8 +22,8 @@ class AIEngine:
                 model_path=path,
                 n_ctx=n_ctx,
                 n_threads=threads,
-                n_gpu_layers=0,
-                verbose=False # ログが多すぎるので一旦False
+                n_gpu_layers=0, # GPUオフ
+                verbose=False 
             )
             return True, os.path.basename(path)
         except Exception as e:
@@ -34,21 +34,32 @@ class AIEngine:
         self.stop_flag = False
         
         try:
+            # ★一人芝居を止めるためのブレーキ
+            stop_words = [
+                "User:", "ユーザー:", 
+                "System:", "システム:",
+                "<start_of_turn>", "<end_of_turn>",
+                "<|start_header_id|>", "<|eot_id|>",
+                "\n\n\n"
+            ]
+
             stream = self.llm(
                 prompt,
                 max_tokens=self.config.params["max_tokens"],
                 temperature=self.config.params["temperature"],
                 top_k=self.config.params["top_k"],
                 repeat_penalty=self.config.params["repeat_penalty"],
+                stop=stop_words,
                 stream=True
             )
-            # ★ここ！受信したデータをそのまま返すラッパー関数を作ります
+            
+            # 受信した文字をコンソールに表示するデバッグ関数
             def debug_stream():
                 print("DEBUG: Stream Start")
                 for output in stream:
-                    # 受信した文字をコンソールに表示（デバッグ）
                     token = output['choices'][0]['text']
-                    print(f"Token: '{token}'", end="", flush=True)
+                    # コンソールにもリアルタイム表示
+                    print(f"{token}", end="", flush=True)
                     yield output
                 print("\nDEBUG: Stream End")
             
