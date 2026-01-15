@@ -8,7 +8,7 @@ class ConfigManager:
         self.params = {
             "max_tokens": 1024,
             
-            # ★Gemma対応：記憶容量を大きく確保（8192）
+            # ★Gemma対応：記憶容量を大きく確保
             "n_ctx": 8192,
             
             "temperature": 0.7,
@@ -22,7 +22,7 @@ class ConfigManager:
             "last_mode": "normal"
         }
         
-        # プロンプトファイルの場所定義
+        # プロンプトファイルの場所
         self.prompt_dir = os.path.join(base_dir, "prompts")
         if not os.path.exists(self.prompt_dir): os.makedirs(self.prompt_dir)
         
@@ -34,8 +34,10 @@ class ConfigManager:
         # 初回起動時に空のプロンプトファイルを作成
         for path in self.prompt_files.values():
             if not os.path.exists(path):
-                with open(path, "w", encoding="utf-8") as f:
-                    f.write("あなたは優秀なアシスタントです。")
+                try:
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write("あなたは優秀なアシスタントです。")
+                except: pass
 
         self.load_settings()
 
