@@ -40,8 +40,8 @@ def capture_document_from_camera(save_filename="camera_photo.jpg"):
     cv2.destroyAllWindows()
     return saved_path
 
-def run_ndlocr(image_path, ndlocr_exe_path):
-    """NDLOCR-Liteを呼び出して文字を読み取る関数です"""
+def run_ndlocr(image_path, ocr_py_path):
+    """NDLOCR-Lite (ocr.py) を呼び出して文字を読み取る関数です"""
     print("\n📝 NDLOCR-Liteにお願いして、文字を読んでもらっています…")
     print("（少しお時間がかかるかもしれません。がんばれー…！）")
     
@@ -50,16 +50,17 @@ def run_ndlocr(image_path, ndlocr_exe_path):
     output_dir = os.path.join(base_dir, "ocr_result")
     os.makedirs(output_dir, exist_ok=True)
 
-    # NDLOCR-Liteをコマンドラインから動かすための命令文を作ります
-    # ※ NDLOCR-Liteの仕様に合わせて引数（-i や -o など）は調整が必要です
-    # 一般的なコマンドラインツールの書き方にしています
-    command = f'"{ndlocr_exe_path}" -i "{image_path}" -o "{output_dir}"'
+    # ★ 画像の説明書にあった通りに、コマンドを作り直しました！
+    # Windows環境に合わせて 'python' としていますが、もし「pythonが見つかりません」
+    # といったエラーが出た場合は、画像のように 'python3' に書き換えてみてくださいね。
+    command = f'python "{ocr_py_path}" --sourceimg "{image_path}" --output "{output_dir}"'
 
     try:
-        # ここで別のソフト（NDLOCR）を裏で実行します！
+        # ここで ocr.py を裏で実行します！
         subprocess.run(command, shell=True, check=True)
         
         # 出来上がったテキストファイルを探します
+        # output_dir の中に .txt ファイルが作られるはずです
         txt_files = glob.glob(os.path.join(output_dir, "*.txt"))
         if not txt_files:
             print("【エラー】テキストファイルが作られなかったみたいです…")
@@ -80,16 +81,17 @@ def run_ndlocr(image_path, ndlocr_exe_path):
 # ==========================================
 
 if __name__ == "__main__":
-    # ★重要：篤志さんのパソコンにある、NDLOCR-Liteの実行ファイル(.exe や .bat)の
+    # ★重要：篤志さんのパソコンにある、NDLOCR-Liteの「ocr.py」の
     # フルパスに書き換えてくださいね！
-    ndlocr_path = r"C:\path\to\ndlocr_lite\ndlocr_cli.exe" 
+    # 例: r"C:\Users\Atsushi\Downloads\ndlocr_cli\ocr.py"
+    ocr_py_path = r"C:\ここに\ocr.pyの\パスを\書いてくださいね\ocr.py" 
     
     # 1. カメラで撮影します
     captured_file = capture_document_from_camera()
     
     if captured_file:
         # 2. 撮った写真をNDLOCR-Liteに渡します
-        extracted_text = run_ndlocr(captured_file, ndlocr_path)
+        extracted_text = run_ndlocr(captured_file, ocr_py_path)
         
         if extracted_text:
             print("\n=========================================")
@@ -99,7 +101,7 @@ if __name__ == "__main__":
             print("=========================================")
             
             # 3. キーワードがあるかチェックします
-            if "契約書" in extracted_text or "請求書" in extracted_text:
+            if "契約書" in extracted_text or "請求書" in extracted_text or "精算" in extracted_text:
                 print("\n💮 「契約書」や「請求書」という文字が入っています！ 大成功です！")
             else:
                 print("\n💦 キーワードは見つかりませんでした…")
